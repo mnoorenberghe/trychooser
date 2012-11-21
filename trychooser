@@ -21,8 +21,62 @@ class NoPrompt:
   def __init__ (self, action):
     self.action = action
 
+class ListPrompt:
+  def __init__(self, prompt, optList):
+    self.promptText = prompt
+    self.options = optList
+
+  def listOptions(self, state):
+    for i, v in enumerate(self.options):
+      state.say(str(i + 1).rjust(2) + ') ' + v.prompt.ljust(20) + ' ' + v.help)
+
+  def prompt(self, state):
+    state.say(self.promptText + '?')
+    self.listOptions(state)
+    input = state.prompt('[1-' + str(len(self.options)) + ']')
+    if input == '?':
+      state.say('Comma delimit options. Specify ranges with hyphens. e.g. 1,3,5-7')
+    else:
+      selected_indexes = self.parse_ranges(input)
+      if (selected_indexes is None):
+        state.say("Invalid option, please try again")
+        return
+      try:
+        return ''.join([self.options[i - 1].action for i in selected_indexes])
+      except IndexError:
+        state.say("Invalid option, please try again")
+
+  # http://stackoverflow.com/a/4248689
+  def parse_ranges(self, astr):
+    result = set()
+    for part in astr.split(','):
+        if (part == ['']):
+          return
+        x = part.split('-')
+        try:
+          if (x == [''] or x[0] == '0'):
+            return
+          result.update(range(int(x[0]), int(x[-1]) + 1))
+        except ValueError:
+          return
+    return sorted(result)
+
 finish = object()
 error = object()
+
+PLATFORMS = [
+  N ("linux", "i386 (32-bit) linux", 'linux,'),
+  N ("linux64", "x86-64 (64-bit) linux", 'linux64,'),
+  N ("macosx64", "Mac OS X 10.7 (x86-64, 64-bit, part of a universal binary)", 'macosx64,'),
+  N ("win32", "Windows (32-bit)", 'win32,'),
+  N ("win64", "Windows (64-bit)", 'win64,'),
+  N ("android", "Android", 'android,'),
+  N ("android-armv6", "Android Armv6", 'android-armv6,'),
+  N ("android-noion", "Android without IonMonkey", 'android-noion,'),
+  N ("ics_armv7a_gecko", "B2G emulator", 'ics_armv7a_gecko,'),
+  N ("panda", "B2G automation board", 'panda,'),
+  N ("unagi", "B2G device image", 'unagi,'),
+]
 
 ################
 # Build each node with it's data
@@ -36,18 +90,7 @@ b_d = N ("Just debug", "Only use debug builds, do not use optimized builds", ' -
 
 p_all = N ("All platforms", "Build on all platforms", ' -p all')
 p_any = NoPrompt (" -p ")
-p_linux = N ("Linux", "Build on i386 (32-bit) linux", 'linux,')
-p_linux64 = N ("linux64", "Build on x86-64 (64-bit) linux", 'linux64,')
-p_macosx64 = N ("macosx64", "Build on Mac OSX 10.6 (x86-64, 64-bit, part of a universal binary)", 'macosx64,')
-p_win32 = N ("win32", "Build on Windows (32-bit)", 'win32,')
-p_win64 = N ("win64", "Build on Windows (64-bit)", 'win64,')
-p_android = N ("android", "Build on Android", 'android,')
-p_android_armv6 = N ("android-armv6", "Build on Android Armv6", 'android-armv6,')
-p_android_noion = N ("android-noion", "Build on Android without IonMonkey", 'android-noion,')
-p_ics_armv7a_gecko = N ("ics_armv7a_gecko", "Build on the B2G emulator", 'ics_armv7a_gecko,')
-p_panda = N ("panda", "Build on panda (B2G automation board)", 'panda,')
-p_unagi = N ("unagi", "Build on unagi (B2G device image)", 'unagi,')
-p_none = NoPrompt (" -p none")
+p_choose = ListPrompt('Which platforms', PLATFORMS)
 
 u_all = N ("All Unit tests", "Run all unit tests on all chosen platforms", ' -u all')
 u_any = N ("Any unit tests", "Would you like to be asked about running each set of unit tests", ' -u ')
@@ -137,29 +180,8 @@ b_d.n = error
 
 p_all.y = u_all
 p_all.n = p_any
-p_any.next = p_linux
-p_linux.y = p_linux64
-p_linux.n = p_linux64
-p_linux64.y = p_macosx64
-p_linux64.n = p_macosx64
-p_macosx64.y = p_win32
-p_macosx64.n = p_win32
-p_win32.y = p_win64
-p_win32.n = p_win64
-p_win64.y = p_android
-p_win64.n = p_android
-p_android.y = p_android_armv6
-p_android.n = p_android_armv6
-p_android_armv6.y = p_android_noion
-p_android_armv6.n = p_android_noion
-p_android_noion.y = p_ics_armv7a_gecko
-p_android_noion.n = p_ics_armv7a_gecko
-p_ics_armv7a_gecko.y = p_panda
-p_ics_armv7a_gecko.n = p_panda
-p_panda.y = p_unagi
-p_panda.n = p_unagi
-p_unagi.y = D(u_all)
-p_unagi.n = D(u_all)
+p_any.next = p_choose
+p_choose.next = D(u_all)
 
 u_all.y = t_all
 u_all.n = u_any
@@ -303,9 +325,14 @@ def run_algorithm(state):
     elif isinstance(node, NoPrompt):
       string += node.action
       node = node.next
+    elif isinstance(node, ListPrompt):
+      result = node.prompt(state)
+      if (result):
+        string += result
+        node = node.next
     elif isinstance(node, N):
       state.say(node.prompt + '?')
-      input = state.prompt()
+      input = state.promptYesNo()
       if input in 'Yy':
         string += node.action
         node = node.y
@@ -322,7 +349,6 @@ def run_algorithm(state):
   # Hard to test these above, so use string search for weird flag combination
   ################
 
-  platforms  = 'linux,linux64,macosx64,win32,win64,android,android-armv6,android-noion,ics_armv7a_gecko,panda,unagi'.split(',')
   unittests = 'reftest,reftest-ipc,reftest-no-accel,crashtest,crashtest-ipc,xpcshell,jsreftest,jetpack,marionette,mozmill,mochitests,reftest-1,reftest-2,reftest-3,reftest-4,jsreftest-1,jsreftest-2,jsreftest-3,crashtest-2,crashtest-3,mochitest-6,mochitest-7,mochitest-8,robocop,reftest-1,reftest-2,reftest-3,reftest-4,reftest-5,reftest-6,marionette-webapi'.split(',')
   taloss = 'nochrome,dromaeo,a11y,svg,chrome,tp,dirty,scroll,cold,v8'.split(',')
 
@@ -339,7 +365,7 @@ def run_algorithm(state):
 
   if string.find ('-p') != -1 and \
      string.find ('-p all') == -1 and \
-     (sum([string.find(x) for x in platforms]) == -1*len(platforms)):
+     (sum([string.find(x.prompt) for x in PLATFORMS]) == -1*len(PLATFORMS)):
     state.say ("no platforms selected, despite asking for some")
     state.say ("Invalid selection: " + string)
     state.exit(-1)
@@ -373,7 +399,10 @@ if __name__ == '__main__':
     def say(self, string):
       print string
 
-    def prompt(self):
+    def prompt(self, msg):
+      return raw_input(msg + '\n')
+
+    def promptYesNo(self):
       return raw_input('[Ynh?]\n')
 
     def exit(self, code):
@@ -401,7 +430,10 @@ else:
       self.ui.write(string + '\n')
       self.ui.flush()
 
-    def prompt(self):
+    def prompt(self, msg):
+      return self.ui.prompt(msg)
+
+    def promptYesNo(self):
       index = self.ui.promptchoice('[Ynh?]', ['&Yes', '&no', '&h', '&?'], default=0)
       return 'Ynh?'[index]
 
